@@ -168,7 +168,9 @@ pub unsafe fn coroutine_switch_context(rsp: *mut c_void, sm: SleepMode, fd: i32)
         }
     }
 
-    assert!(!ACTIVE.is_empty());
+    if ACTIVE.is_empty() {
+        panic!("No active coroutines");
+    }
     CURRENT %= ACTIVE.len();
     coroutine_restore_context(CONTEXTS[ACTIVE[CURRENT]].rsp as *mut c_void);
 }
@@ -203,7 +205,9 @@ pub unsafe fn finish_current() {
         }
     }
 
-    assert!(!ACTIVE.is_empty());
+    if ACTIVE.is_empty() {
+        panic!("No active coroutines");
+    }
     CURRENT %= ACTIVE.len();
     coroutine_restore_context(CONTEXTS[ACTIVE[CURRENT]].rsp as *mut c_void);
 }
@@ -236,7 +240,9 @@ pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
             -1,
             0,
         );
-        assert!(!stack.is_null());
+        if stack == libc::MAP_FAILED {
+            panic!("mmap failed");
+        }
         CONTEXTS[id].stack_base = stack as usize;
         id
     };
