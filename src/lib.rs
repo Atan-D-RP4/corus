@@ -1,6 +1,11 @@
 #![feature(naked_functions)]
-use std::os::raw::c_void;
-use std::{arch::naked_asm, os::fd::BorrowedFd};
+use std::{
+    arch::naked_asm,
+    os::{fd::BorrowedFd, raw::c_void},
+    ptr,
+};
+
+use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 
 // Example safe wrapper
 pub fn go<F>(f: F)
@@ -17,6 +22,10 @@ where
     unsafe { _go(wrapper::<F>, ptr) };
 }
 
+pub fn yield_coroutine() {
+    unsafe { _yield_coroutine() }
+}
+
 pub fn id() -> usize {
     unsafe { _id() }
 }
@@ -31,7 +40,7 @@ pub fn wake_up(id: usize) {
 
 #[naked]
 #[no_mangle]
-pub unsafe fn yield_coroutine() {
+pub unsafe fn _yield_coroutine() {
     naked_asm!(
         "push rdi",
         "push rbp",
@@ -98,13 +107,10 @@ pub unsafe fn coroutine_restore_context(rsp: *mut c_void) {
     );
 }
 
-use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-use std::ptr;
-
 static mut CURRENT: usize = 0;
 static mut ACTIVE: Vec<usize> = Vec::new();
 static mut DEAD: Vec<usize> = Vec::new();
-static mut CONTEXTS: Vec<Context> = Vec::new();
+static mut COROUTINES: Vec<Context> = Vec::new();
 static mut ASLEEP: Vec<usize> = Vec::new();
 static mut POLLS: Vec<PollFd> = Vec::new();
 
@@ -118,7 +124,7 @@ struct Context {
 
 #[repr(C)]
 #[derive(PartialEq)]
-enum SleepMode {
+pub enum SleepMode {
     SmNone = 0,
     SmRead,
     SmWrite,
@@ -127,7 +133,7 @@ enum SleepMode {
 #[no_mangle]
 #[inline(never)]
 pub unsafe fn coroutine_switch_context(rsp: *mut c_void, sm: SleepMode, fd: i32) {
-    CONTEXTS[ACTIVE[CURRENT]].rsp = rsp as usize;
+    COROUTINES[ACTIVE[CURRENT]].rsp = rsp as usize;
 
     let borrowed_fd = BorrowedFd::borrow_raw(fd);
     match sm {
@@ -172,7 +178,7 @@ pub unsafe fn coroutine_switch_context(rsp: *mut c_void, sm: SleepMode, fd: i32)
         panic!("No active coroutines");
     }
     CURRENT %= ACTIVE.len();
-    coroutine_restore_context(CONTEXTS[ACTIVE[CURRENT]].rsp as *mut c_void);
+    coroutine_restore_context(COROUTINES[ACTIVE[CURRENT]].rsp as *mut c_void);
 }
 
 #[no_mangle]
@@ -209,14 +215,12 @@ pub unsafe fn finish_current() {
         panic!("No active coroutines");
     }
     CURRENT %= ACTIVE.len();
-    coroutine_restore_context(CONTEXTS[ACTIVE[CURRENT]].rsp as *mut c_void);
+    coroutine_restore_context(COROUTINES[ACTIVE[CURRENT]].rsp as *mut c_void);
 }
 
 pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
-    use libc::{mmap, MAP_ANONYMOUS, MAP_GROWSDOWN, MAP_PRIVATE, MAP_STACK, PROT_READ, PROT_WRITE};
-
-    if CONTEXTS.is_empty() {
-        CONTEXTS.push(Context {
+    if COROUTINES.is_empty() {
+        COROUTINES.push(Context {
             rsp: 0,
             stack_base: 0,
         });
@@ -226,28 +230,19 @@ pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
     let id = if !DEAD.is_empty() {
         DEAD.pop().unwrap()
     } else {
-        CONTEXTS.push(Context {
+        COROUTINES.push(Context {
             rsp: 0,
             stack_base: 0,
         });
-        let id = CONTEXTS.len() - 1;
+        let id = COROUTINES.len() - 1;
 
-        let stack = mmap(
-            ptr::null_mut(),
-            STACK_SIZE,
-            PROT_WRITE | PROT_READ,
-            MAP_PRIVATE | MAP_STACK | MAP_ANONYMOUS | MAP_GROWSDOWN,
-            -1,
-            0,
-        );
-        if stack == libc::MAP_FAILED {
-            panic!("mmap failed");
-        }
-        CONTEXTS[id].stack_base = stack as usize;
+        // Rust idiomatic stack allocation with alignment considered
+        let stack = std::alloc::alloc(std::alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap());
+        COROUTINES[id].stack_base = stack as usize;
         id
     };
 
-    let mut rsp = (CONTEXTS[id].stack_base + STACK_SIZE) as *mut *mut c_void;
+    let mut rsp = (COROUTINES[id].stack_base + STACK_SIZE) as *mut *mut c_void;
 
     rsp = rsp.offset(-1);
     *rsp = finish_current as *mut c_void;
@@ -264,7 +259,7 @@ pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
         *rsp = ptr::null_mut();
     }
 
-    CONTEXTS[id].rsp = rsp as usize;
+    COROUTINES[id].rsp = rsp as usize;
     ACTIVE.push(id);
 }
 

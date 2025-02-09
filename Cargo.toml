@@ -8,5 +8,4 @@ build = "build.rs"
 cc = "1.0.67"
 
 [dependencies]
-libc = "0.2.169"
 nix = { version = "0.29.0", features = ["poll"] }

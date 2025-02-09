@@ -4,7 +4,7 @@ fn counter(x: usize) {
         print!("Counter [{}]: {} :: ", coroutines::id(), i);
         i += 1;
         println!("Yielding");
-        unsafe { coroutines::yield_coroutine() };
+        coroutines::yield_coroutine();
     });
 }
 
@@ -15,9 +15,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     coroutines::go(|| counter(25));
 
     while coroutines::alive() > 1 {
-        unsafe {
-            coroutines::yield_coroutine();
-        }
+        coroutines::yield_coroutine();
     }
     println!("All coroutines finished");
 

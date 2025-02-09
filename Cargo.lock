@@ -34,7 +34,6 @@ name = "coroutines"
 version = "0.1.0"
 dependencies = [
  "cc",
- "libc",
  "nix",
 ]
 
