@@ -1,7 +1,7 @@
 #ifdef __x86_64__
+
 void __attribute__((naked)) _yield_coroutine(void)
 {
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -17,8 +17,6 @@ void __attribute__((naked)) _yield_coroutine(void)
 
 void __attribute__((naked)) _sleep_read(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -35,8 +33,6 @@ void __attribute__((naked)) _sleep_read(int fd)
 
 void __attribute__((naked)) _sleep_write(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    pushq %rdi\n"
     "    pushq %rbp\n"
@@ -53,8 +49,6 @@ void __attribute__((naked)) _sleep_write(int fd)
 
 void __attribute__((naked)) _restore_context(void *rsp)
 {
-    // @arch
-    (void)rsp;
     asm(
     "    movq %rdi, %rsp\n"
     "    popq %r15\n"
@@ -72,7 +66,6 @@ void __attribute__((naked)) _restore_context(void *rsp)
 
 void __attribute__((naked)) _yield_coroutine(void)
 {
-    // @arch
     asm(
     "    stp x29, x30, [sp, #-16]!\n"
     "    mov x0, sp\n"
@@ -84,8 +77,6 @@ void __attribute__((naked)) _yield_coroutine(void)
 
 void __attribute__((naked)) _sleep_read(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    stp x29, x30, [sp, #-16]!\n"
     "    mov x2, x0\n"
@@ -98,8 +89,6 @@ void __attribute__((naked)) _sleep_read(int fd)
 
 void __attribute__((naked)) _sleep_write(int fd)
 {
-    (void) fd;
-    // @arch
     asm(
     "    stp x29, x30, [sp, #-16]!\n"
     "    mov x2, x0\n"
@@ -112,7 +101,6 @@ void __attribute__((naked)) _sleep_write(int fd)
 
 void __attribute__((naked)) _restore_context(void *rsp)
 {
-    // @arch
     (void)rsp;
     asm(
     "    mov sp, x0\n"
@@ -122,7 +110,6 @@ void __attribute__((naked)) _restore_context(void *rsp)
 
 void __attribute__((naked)) _switch_context(void *rsp, Sleep_Mode sm, int fd)
 {
-    // @arch
     asm(
     "    mov sp, x0\n"
     "    mov x2, x1\n"

@@ -1,3 +1,4 @@
+// Consider using this https://github.com/zonyitoo/context-rs/
 use std::{
     os::{fd::BorrowedFd, raw::c_void},
     ptr,
@@ -18,6 +19,15 @@ const STACK_SIZE: usize = 1024 * 8;
 struct Context {
     rsp: usize,
     stack_base: usize,
+}
+
+impl Context {
+    fn new() -> Self {
+        Self {
+            rsp: 0,
+            stack_base: 0,
+        }
+    }
 }
 
 #[repr(C)]
@@ -201,10 +211,7 @@ unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
     let active = &mut *active;
     let dead = &mut *dead;
     if coroutines.is_empty() {
-        coroutines.push(Context {
-            rsp: 0,
-            stack_base: 0,
-        });
+        coroutines.push(Context::new());
         active.push(0);
     }
 
