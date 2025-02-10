@@ -3,10 +3,10 @@ extern crate cc;
 
 fn main() {
     cc::Build::new()
-        .file("coroutine.c")  // Path to your C file
+        .file("src/nakeds.c")  // Path to your C file
         .opt_level(3)
         .static_flag(true)
-        .compile("coroutine");
+        .compile("coroutines");
 
-    println!("cargo:rerun-if-changed=coroutine.c");
+    println!("cargo:rerun-if-changed=nakeds.c");
 }

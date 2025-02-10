@@ -112,7 +112,68 @@ typedef enum {
   SM_WRITE,
 } Sleep_Mode;
 
-extern void coroutine_restore_context(void *rsp);
+// Linux x86_64 call convention
+// %rdi, %rsi, %rdx, %rcx, %r8, and %r9
+
+void __attribute__((naked)) coroutine_yield(void) {
+  // @arch
+  asm("    pushq %rdi\n"
+      "    pushq %rbp\n"
+      "    pushq %rbx\n"
+      "    pushq %r12\n"
+      "    pushq %r13\n"
+      "    pushq %r14\n"
+      "    pushq %r15\n"
+      "    movq %rsp, %rdi\n" // rsp
+      "    movq $0, %rsi\n"   // sm = SM_NONE
+      "    jmp coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_sleep_read(int fd) {
+  (void)fd;
+  // @arch
+  asm("    pushq %rdi\n"
+      "    pushq %rbp\n"
+      "    pushq %rbx\n"
+      "    pushq %r12\n"
+      "    pushq %r13\n"
+      "    pushq %r14\n"
+      "    pushq %r15\n"
+      "    movq %rdi, %rdx\n" // fd
+      "    movq %rsp, %rdi\n" // rsp
+      "    movq $1, %rsi\n"   // sm = SM_READ
+      "    jmp coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_sleep_write(int fd) {
+  (void)fd;
+  // @arch
+  asm("    pushq %rdi\n"
+      "    pushq %rbp\n"
+      "    pushq %rbx\n"
+      "    pushq %r12\n"
+      "    pushq %r13\n"
+      "    pushq %r14\n"
+      "    pushq %r15\n"
+      "    movq %rdi, %rdx\n" // fd
+      "    movq %rsp, %rdi\n" // rsp
+      "    movq $2, %rsi\n"   // sm = SM_WRITE
+      "    jmp coroutine_switch_context\n");
+}
+
+void __attribute__((naked)) coroutine_restore_context(void *rsp) {
+  // @arch
+  (void)rsp;
+  asm("    movq %rdi, %rsp\n"
+      "    popq %r15\n"
+      "    popq %r14\n"
+      "    popq %r13\n"
+      "    popq %r12\n"
+      "    popq %rbx\n"
+      "    popq %rbp\n"
+      "    popq %rdi\n"
+      "    ret\n");
+}
 
 void coroutine_switch_context(void *rsp, Sleep_Mode sm, int fd) {
   contexts.items[active.items[current]].rsp = rsp;
@@ -176,7 +237,7 @@ void coroutine_init(void) {
   da_append(&active, 0);
 }
 
-void finish_current(void) {
+void coroutine__finish_current(void) {
   if (active.items[current] == 0) {
     UNREACHABLE("Main Coroutine with id == 0 should never reach this place");
   }
@@ -207,12 +268,7 @@ void finish_current(void) {
   coroutine_restore_context(contexts.items[active.items[current]].rsp);
 }
 
-void _go(void (*f)(void *), void *arg) {
-  if (contexts.count == 0) {
-    da_append(&contexts, (Context){0});
-    da_append(&active, 0);
-  }
-
+void coroutine_go(void (*f)(void *), void *arg) {
   size_t id;
   if (dead.count > 0) {
     id = dead.items[--dead.count];
@@ -228,7 +284,7 @@ void _go(void (*f)(void *), void *arg) {
   void **rsp =
       (void **)((char *)contexts.items[id].stack_base + STACK_CAPACITY);
   // @arch
-  *(--rsp) = finish_current;
+  *(--rsp) = coroutine__finish_current;
   *(--rsp) = f;
   *(--rsp) = arg; // push rdi
   *(--rsp) = 0;   // push rbx
@@ -242,11 +298,11 @@ void _go(void (*f)(void *), void *arg) {
   da_append(&active, id);
 }
 
-size_t _id(void) { return active.items[current]; }
+size_t coroutine_id(void) { return active.items[current]; }
 
-size_t _alive(void) { return active.count; }
+size_t coroutine_alive(void) { return active.count; }
 
-void _wake_up(size_t id) {
+void coroutine_wake_up(size_t id) {
   // @speed coroutine_wake_up is linear
   for (size_t i = 0; i < asleep.count; ++i) {
     if (asleep.items[i] == id) {

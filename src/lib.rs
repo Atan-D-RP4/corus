@@ -1,111 +1,9 @@
-#![feature(naked_functions)]
 use std::{
-    arch::naked_asm,
     os::{fd::BorrowedFd, raw::c_void},
     ptr,
 };
 
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
-
-// Example safe wrapper
-pub fn go<F>(f: F)
-where
-    F: FnOnce(),
-{
-    extern "C" fn wrapper<F: FnOnce()>(arg: *mut c_void) {
-        let boxed_fn = unsafe { Box::from_raw(arg as *mut F) };
-        boxed_fn();
-    }
-
-    let boxed_fn = Box::new(f);
-    let ptr = Box::into_raw(boxed_fn) as *mut c_void;
-    unsafe { _go(wrapper::<F>, ptr) };
-}
-
-pub fn yield_coroutine() {
-    unsafe { _yield_coroutine() }
-}
-
-pub fn id() -> usize {
-    unsafe { _id() }
-}
-
-pub fn alive() -> usize {
-    unsafe { _alive() }
-}
-
-pub fn wake_up(id: usize) {
-    unsafe { _wake_up(id) }
-}
-
-#[naked]
-#[no_mangle]
-pub unsafe fn _yield_coroutine() {
-    naked_asm!(
-        "push rdi",
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "mov rdi, rsp", // rsp
-        "mov rsi, 0",   // sm = SM_NONE
-        "jmp coroutine_switch_context"
-    );
-}
-
-#[naked]
-#[no_mangle]
-pub unsafe fn sleep_read(fd: i32) {
-    naked_asm!(
-        "push rdi",
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "mov rdx, rdi", // fd
-        "mov rdi, rsp", // rsp
-        "mov rsi, 1",   // sm = SM_READ
-        "jmp coroutine_switch_context"
-    );
-}
-
-#[naked]
-#[no_mangle]
-pub unsafe fn sleep_write(fd: i32) {
-    naked_asm!(
-        "push rdi",
-        "push rbp",
-        "push rbx",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        "mov rdx, rdi", // fd
-        "mov rdi, rsp", // rsp
-        "mov rsi, 2",   // sm = SM_WRITE
-        "jmp coroutine_switch_context"
-    );
-}
-
-#[naked]
-#[no_mangle]
-pub unsafe fn coroutine_restore_context(rsp: *mut c_void) {
-    naked_asm!(
-        "mov rsp, rdi",
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop rbx",
-        "pop rbp",
-        "pop rdi",
-        "ret",
-    );
-}
 
 static mut CURRENT: usize = 0;
 static mut ACTIVE: Vec<usize> = Vec::new();
@@ -124,125 +22,208 @@ struct Context {
 
 #[repr(C)]
 #[derive(PartialEq)]
-pub enum SleepMode {
-    SmNone = 0,
-    SmRead,
-    SmWrite,
+#[allow(dead_code)]
+enum SleepMode {
+    None = 0,
+    Read,
+    Write,
+}
+
+// Safe wrappers
+pub fn go<F>(f: F)
+where
+    F: FnOnce(),
+{
+    extern "C" fn wrapper<F: FnOnce()>(arg: *mut c_void) {
+        let boxed_fn = unsafe { Box::from_raw(arg as *mut F) };
+        boxed_fn();
+    }
+
+    let boxed_fn = Box::new(f);
+    let ptr = Box::into_raw(boxed_fn) as *mut c_void;
+    unsafe { _go(wrapper::<F>, ptr) };
+}
+
+pub fn yield_coroutine() {
+    unsafe { _yield_coroutine() }
+}
+
+pub fn sleep_read(fd: i32) {
+    unsafe { _sleep_read(fd) }
+}
+
+pub fn sleep_write(fd: i32) {
+    unsafe { _sleep_write(fd) }
+}
+
+pub fn id() -> usize {
+    unsafe { _id() }
+}
+
+pub fn alive() -> usize {
+    unsafe { _alive() }
+}
+
+pub fn wake_up(id: usize) {
+    unsafe { _wake_up(id) }
+}
+
+unsafe extern "C" {
+    pub unsafe fn _yield_coroutine();
+    pub unsafe fn _sleep_read(fd: i32);
+    pub unsafe fn _sleep_write(fd: i32);
+    pub unsafe fn _restore_context(rsp: *mut c_void);
+}
+
+unsafe fn get_state() -> (
+    *mut usize,
+    *mut Vec<usize>,
+    *mut Vec<usize>,
+    *mut Vec<Context>,
+    *mut Vec<usize>,
+    *mut Vec<PollFd<'static>>,
+) {
+    (
+        &raw mut CURRENT,
+        &raw mut ACTIVE,
+        &raw mut DEAD,
+        &raw mut COROUTINES,
+        &raw mut ASLEEP,
+        &raw mut POLLS,
+    )
 }
 
 #[no_mangle]
 #[inline(never)]
-pub unsafe fn coroutine_switch_context(rsp: *mut c_void, sm: SleepMode, fd: i32) {
-    COROUTINES[ACTIVE[CURRENT]].rsp = rsp as usize;
+unsafe fn switch_context(rsp: *mut c_void, sm: SleepMode, fd: i32) {
+    let (current, active, _, coroutines, asleep, polls) = get_state();
+    let coroutines = &mut *coroutines;
+    let active = &mut *active;
+    let asleep = &mut *asleep;
+
+    let polls = &mut *polls;
+    coroutines[active[*current]].rsp = rsp as usize;
 
     let borrowed_fd = BorrowedFd::borrow_raw(fd);
     match sm {
-        SleepMode::SmNone => {
-            CURRENT += 1;
+        SleepMode::None => {
+            *current += 1;
         }
-        SleepMode::SmRead => {
-            ASLEEP.push(ACTIVE[CURRENT]);
+        SleepMode::Read => {
+            asleep.push(active[*current]);
             let borrowed_fd = BorrowedFd::borrow_raw(fd);
-            POLLS.push(PollFd::new(borrowed_fd, PollFlags::POLLRDNORM));
-            ACTIVE.swap_remove(CURRENT);
+            polls.push(PollFd::new(borrowed_fd, PollFlags::POLLRDNORM));
+            active.swap_remove(*current);
         }
-        SleepMode::SmWrite => {
-            ASLEEP.push(ACTIVE[CURRENT]);
-            POLLS.push(PollFd::new(borrowed_fd, PollFlags::POLLWRNORM));
-            ACTIVE.swap_remove(CURRENT);
+        SleepMode::Write => {
+            asleep.push(active[*current]);
+            polls.push(PollFd::new(borrowed_fd, PollFlags::POLLWRNORM));
+            active.swap_remove(*current);
         }
     }
 
-    if !POLLS.is_empty() {
-        let timeout = if ACTIVE.is_empty() {
+    if !polls.is_empty() {
+        let timeout = if active.is_empty() {
             PollTimeout::NONE
         } else {
             PollTimeout::ZERO
         };
-        let _ = poll(&mut POLLS, timeout);
+        let _ = poll(polls, timeout);
 
         let mut i = 0;
-        while i < POLLS.len() {
-            if POLLS[i].revents().unwrap_or(PollFlags::empty()).bits() != 0 {
-                let id = ASLEEP[i];
-                POLLS.swap_remove(i);
-                ASLEEP.swap_remove(i);
-                ACTIVE.push(id);
+        while i < polls.len() {
+            if polls[i].revents().unwrap_or(PollFlags::empty()).bits() != 0 {
+                let id = asleep[i];
+                polls.swap_remove(i);
+                asleep.swap_remove(i);
+                active.push(id);
             } else {
                 i += 1;
             }
         }
     }
 
-    if ACTIVE.is_empty() {
-        panic!("No active coroutines");
+    if active.is_empty() {
+        panic!("no active coroutines");
     }
-    CURRENT %= ACTIVE.len();
-    coroutine_restore_context(COROUTINES[ACTIVE[CURRENT]].rsp as *mut c_void);
+    *current %= active.len();
+    _restore_context(coroutines[active[*current]].rsp as *mut c_void);
 }
 
 #[no_mangle]
-pub unsafe fn finish_current() {
-    if ACTIVE[CURRENT] == 0 {
+unsafe fn finish_current() {
+    let (current, active, dead, coroutines, asleep, polls) = get_state();
+    let coroutines = &mut *coroutines;
+    let active = &mut *active;
+    let active = &mut *active;
+    let asleep = &mut *asleep;
+    let dead = &mut *dead;
+    let mut polls = &mut *polls;
+    if active[*current] == 0 {
         panic!("Main Coroutine with id == 0 should never reach this place");
     }
 
-    DEAD.push(ACTIVE[CURRENT]);
-    ACTIVE.swap_remove(CURRENT);
+    dead.push(active[*current]);
+    active.swap_remove(*current);
 
-    if !POLLS.is_empty() {
-        let timeout = if ACTIVE.is_empty() {
+    if !polls.is_empty() {
+        let timeout = if active.is_empty() {
             PollTimeout::NONE
         } else {
             PollTimeout::ZERO
         };
-        let _ = poll(&mut POLLS, timeout);
+        let _ = poll(&mut polls, timeout);
 
         let mut i = 0;
-        while i < POLLS.len() {
-            if POLLS[i].revents().unwrap_or(PollFlags::empty()).bits() != 0 {
-                let id = ASLEEP[i];
-                POLLS.swap_remove(i);
-                ASLEEP.swap_remove(i);
-                ACTIVE.push(id);
+        while i < polls.len() {
+            if polls[i].revents().unwrap_or(PollFlags::empty()).bits() != 0 {
+                let id = asleep[i];
+                polls.swap_remove(i);
+                asleep.swap_remove(i);
+                active.push(id);
             } else {
                 i += 1;
             }
         }
     }
 
-    if ACTIVE.is_empty() {
-        panic!("No active coroutines");
+    if active.is_empty() {
+        panic!("no active coroutines");
     }
-    CURRENT %= ACTIVE.len();
-    coroutine_restore_context(COROUTINES[ACTIVE[CURRENT]].rsp as *mut c_void);
+    *current %= active.len();
+    _restore_context(coroutines[active[*current]].rsp as *mut c_void);
 }
 
-pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
-    if COROUTINES.is_empty() {
-        COROUTINES.push(Context {
+unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
+    let (_, active, dead, coroutines, _, _) = get_state();
+    let coroutines = &mut *coroutines;
+    let active = &mut *active;
+    let active = &mut *active;
+    let dead = &mut *dead;
+    if coroutines.is_empty() {
+        coroutines.push(Context {
             rsp: 0,
             stack_base: 0,
         });
-        ACTIVE.push(0);
+        active.push(0);
     }
 
-    let id = if !DEAD.is_empty() {
-        DEAD.pop().unwrap()
+    let id = if !dead.is_empty() {
+        dead.pop().unwrap()
     } else {
-        COROUTINES.push(Context {
+        coroutines.push(Context {
             rsp: 0,
             stack_base: 0,
         });
-        let id = COROUTINES.len() - 1;
+        let id = coroutines.len() - 1;
 
         // Rust idiomatic stack allocation with alignment considered
         let stack = std::alloc::alloc(std::alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap());
-        COROUTINES[id].stack_base = stack as usize;
+        coroutines[id].stack_base = stack as usize;
         id
     };
 
-    let mut rsp = (COROUTINES[id].stack_base + STACK_SIZE) as *mut *mut c_void;
+    let mut rsp = (coroutines[id].stack_base + STACK_SIZE) as *mut *mut c_void;
 
     rsp = rsp.offset(-1);
     *rsp = finish_current as *mut c_void;
@@ -259,24 +240,32 @@ pub unsafe fn _go(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
         *rsp = ptr::null_mut();
     }
 
-    COROUTINES[id].rsp = rsp as usize;
-    ACTIVE.push(id);
+    coroutines[id].rsp = rsp as usize;
+    active.push(id);
 }
 
-pub unsafe fn _id() -> usize {
-    ACTIVE[CURRENT]
+unsafe fn _id() -> usize {
+    let (current, active, _, _, _, _) = get_state();
+    let active = &mut *active;
+    active[*current]
 }
 
-pub unsafe fn _alive() -> usize {
-    ACTIVE.len()
+unsafe fn _alive() -> usize {
+    let (_, active, _, _, _, _) = get_state();
+    let active = &mut *active;
+    active.len()
 }
 
-pub unsafe fn _wake_up(id: usize) {
-    for i in 0..ASLEEP.len() {
-        if ASLEEP[i] == id {
-            ASLEEP.swap_remove(i);
-            POLLS.swap_remove(i);
-            ACTIVE.push(id);
+unsafe fn _wake_up(id: usize) {
+    let (_, active, _, _, asleep, polls) = get_state();
+    let active = &mut *active;
+    let asleep = &mut *asleep;
+    let polls = &mut *polls;
+    for i in 0..asleep.len() {
+        if asleep[i] == id {
+            asleep.swap_remove(i);
+            polls.swap_remove(i);
+            active.push(id);
             return;
         }
     }
