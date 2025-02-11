@@ -1,5 +1,4 @@
 #ifdef __x86_64__
-
 void __attribute__((naked)) _yield_coroutine(void)
 {
     asm(
@@ -47,7 +46,7 @@ void __attribute__((naked)) _sleep_write(int fd)
     "    jmp switch_context\n");
 }
 
-void __attribute__((naked)) _restore_context(void *rsp)
+void __attribute__((naked)) _restore_coroutine(void *rsp)
 {
     asm(
     "    movq %rdi, %rsp\n"
