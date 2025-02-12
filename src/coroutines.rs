@@ -1,3 +1,82 @@
+// NOTE:
+// The following commented out code only works on the nightly compiler
+// with naked functions feature enabled
+//
+// pub mod nakeds {
+//     use std::arch::naked_asm;
+//     use std::ffi::c_void;
+//
+//     #[naked]
+//     #[no_mangle]
+//     pub unsafe fn _yield_coroutine() {
+//         naked_asm!(
+//             "push rdi",
+//             "push rbp",
+//             "push rbx",
+//             "push r12",
+//             "push r13",
+//             "push r14",
+//             "push r15",
+//             "mov rdi, rsp", // rsp
+//             "mov rsi, 0",   // sm = SM_NONE
+//             "jmp switch_context"
+//         );
+//     }
+//
+//     #[naked]
+//     #[no_mangle]
+//     pub unsafe fn _sleep_read(fd: i32) {
+//         naked_asm!(
+//             "push rdi",
+//             "push rbp",
+//             "push rbx",
+//             "push r12",
+//             "push r13",
+//             "push r14",
+//             "push r15",
+//             "mov rdx, rdi", // fd
+//             "mov rdi, rsp", // rsp
+//             "mov rsi, 1",   // sm = SM_READ
+//             "jmp switch_context"
+//         );
+//     }
+//
+//     #[naked]
+//     #[no_mangle]
+//     pub unsafe fn _sleep_write(fd: i32) {
+//         naked_asm!(
+//             "push rdi",
+//             "push rbp",
+//             "push rbx",
+//             "push r12",
+//             "push r13",
+//             "push r14",
+//             "push r15",
+//             "mov rdx, rdi", // fd
+//             "mov rdi, rsp", // rsp
+//             "mov rsi, 2",   // sm = SM_WRITE
+//             "jmp switch_context"
+//         );
+//     }
+//
+//     #[naked]
+//     #[no_mangle]
+//     pub unsafe fn _restore_coroutine(rsp: *mut c_void) {
+//         naked_asm!(
+//             "mov rsp, rdi",
+//             "pop r15",
+//             "pop r14",
+//             "pop r13",
+//             "pop r12",
+//             "pop rbx",
+//             "pop rbp",
+//             "pop rdi",
+//             "ret",
+//         );
+//     }
+// }
+// use crate::coroutines::nakeds::{_restore_coroutine, _sleep_read, _sleep_write, _yield_coroutine};
+
 use std::{
     os::{fd::BorrowedFd, raw::c_void},
     ptr,
@@ -5,6 +84,7 @@ use std::{
 
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 
+// Compile this when not using the nightly compiler
 unsafe extern "C" {
     pub unsafe fn _yield_coroutine();
     pub unsafe fn _sleep_read(fd: i32);

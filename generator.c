@@ -62,7 +62,7 @@ typedef struct {
 } Generator_Stack;
 
 #define foreach(it, g, arg)                                                    \
-  for (void *it = generator_next(g, arg); !(g)->dead;                          \
+  for (void *it = generator_next((void *)g, arg); !(g)->dead;                          \
        it = generator_next(g, arg))
 
 thread_local Generator_Stack generator_stack = {0};
@@ -70,7 +70,7 @@ thread_local Generator_Stack generator_stack = {0};
 // Linux x86_64 call convention
 // %rdi, %rsi, %rdx, %rcx, %r8, and %r9
 
-void *__attribute__((naked)) generator_next(Generator *g, void *arg) {
+void *__attribute__((naked)) generator_next(void *g, void *arg) {
   // @arch
   asm("    testq %rdi, %rdi\n"
       "    jnz 1f\n"

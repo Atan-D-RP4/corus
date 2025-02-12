@@ -1,73 +1,76 @@
-// use std::marker::PhantomData;
-// use std::sync::mpsc::{channel, Receiver, Sender};
-// use crate::coroutines::{go, yield_coroutine, sleep_write, sleep_read};
-//
-// pub struct Generator<T> {
-//         receiver: Receiver<T>,
-//         _phantom: PhantomData<T>,
+use std::ffi::c_void;
+
+#[derive(Debug, Clone, Copy)]
+pub struct Generator {
+    stack_base: usize,
+    rsp: usize,
+    fresh: bool,
+    dead: bool,
+}
+
+extern "C" {
+    fn _generator_next(g: *mut c_void, arg: *mut c_void);
+    fn _generator_restore_context(rsp: *mut c_void);
+    fn _generator_restore_context_with_return(rsp: *mut c_void, arg: *mut c_void);
+    fn _generator_yield(arg: *mut c_void);
+
+}
+
+thread_local! {
+    static CURRENT: Vec<Generator> = vec![Generator {
+        stack_base: 0,
+        rsp: 0,
+        fresh: true,
+        dead: false,
+    }];
+}
+
+const STACK_SIZE: usize = 1024 * 8;
+
+// void generator_return(void *arg, void *rsp) {
+//   da_last(&generator_stack)->rsp = rsp;
+//   generator_stack.count -= 1;
+//   generator_restore_context_with_return(da_last(&generator_stack)->rsp, arg);
 // }
 //
-// pub struct Yielder<T> {
-//         sender: Sender<T>,
-//         _phantom: PhantomData<T>,
+// void generator__finish_current(void) {
+//   da_last(&generator_stack)->dead = true;
+//   generator_stack.count -= 1;
+//   generator_restore_context_with_return(da_last(&generator_stack)->rsp, NULL);
 // }
 //
-// impl<T> Generator<T> {
-//         pub fn new<F>(f: F) -> Self
-//     where
-//         F: FnOnce(Yielder<T>) + 'static,
-//             T: 'static,
-//         {
-//         let (sender, receiver) = channel();
-//         let yielder = Yielder {
-//             sender,
-//             _phantom: PhantomData,
-//         };
+// Generator *generator_create(void (*f)(void *)) {
+//   if (generator_stack.count == 0) {
+//     Generator *g = malloc(sizeof(Generator));
+//     assert(g != NULL && "Buy more RAM lol");
+//     memset(g, 0, sizeof(*g));
+//     da_append(&generator_stack, g);
+//   }
+//   Generator *g = malloc(sizeof(Generator));
+//   assert(g != NULL && "Buy more RAM lol");
+//   memset(g, 0, sizeof(*g));
 //
-//         go(move || {
-//             f(yielder);
-//         });
-//
-//         Generator {
-//             receiver,
-//             _phantom: PhantomData,
-//         }
-//     }
+//   g->stack_base =
+//       mmap(NULL, GENERATOR_STACK_CAPACITY, PROT_WRITE | PROT_READ,
+//            MAP_PRIVATE | MAP_STACK | MAP_ANONYMOUS | MAP_GROWSDOWN, -1, 0);
+//   assert(g->stack_base != MAP_FAILED);
+//   void **rsp = (void **)((char *)g->stack_base + GENERATOR_STACK_CAPACITY);
+//   *(--rsp) = generator__finish_current;
+//   *(--rsp) = f;
+//   *(--rsp) = 0; // push rdi
+//   *(--rsp) = 0; // push rbx
+//   *(--rsp) = 0; // push rbp
+//   *(--rsp) = 0; // push r12
+//   *(--rsp) = 0; // push r13
+//   *(--rsp) = 0; // push r14
+//   *(--rsp) = 0; // push r15
+//   g->rsp = rsp;
+//   g->fresh = true;
+//   return g;
 // }
 //
-// impl<T> Iterator for Generator<T> {
-//         type Item = T;
-//
-//         fn next(&mut self) -> Option<Self::Item> {
-//         self.receiver.recv().ok()
-//         }
+// void generator_destroy(Generator *g) {
+//   munmap(g->stack_base, GENERATOR_STACK_CAPACITY);
+//   free(g);
 // }
 //
-// impl<T> Yielder<T> {
-//         pub fn yield_(&self, value: T) {
-//         self.sender.send(value).unwrap();
-//         yield_coroutine();
-//     }
-// }
-//
-// // Example usage
-// pub fn range(start: i32, end: i32) -> Generator<i32> {
-//     Generator::new(move |y| {
-//         let mut current = start;
-//         while current < end {
-//             y.yield_(current);
-//             current += 1;
-//         }
-//     })
-// }
-//
-// // Helper function for async I/O generators
-// pub fn yield_on_read<T>(fd: i32, value: T, yielder: &Yielder<T>) {
-//     yielder.yield_(value);
-//     sleep_read(fd);
-// }
-//
-// pub fn yield_on_write<T>(fd: i32, value: T, yielder: &Yielder<T>) {
-//     yielder.yield_(value);
-//     sleep_write(fd);
-// }
