@@ -62,96 +62,41 @@ typedef struct {
 } Generator_Stack;
 
 #define foreach(it, g, arg)                                                    \
-  for (void *it = generator_next((void *)g, arg); !(g)->dead;                          \
-       it = generator_next(g, arg))
+  for (void *it = _next((void *)g, arg); !(g)->dead; it = _next(g, arg))
 
 thread_local Generator_Stack generator_stack = {0};
 
 // Linux x86_64 call convention
 // %rdi, %rsi, %rdx, %rcx, %r8, and %r9
 
-void *__attribute__((naked)) generator_next(void *g, void *arg) {
-  // @arch
-  asm("    testq %rdi, %rdi\n"
-      "    jnz 1f\n"
-      "    xor %rax, %rax\n"
-      "    ret\n"
-      "1:\n"
-      "    pushq %rdi\n"
-      "    pushq %rbp\n"
-      "    pushq %rbx\n"
-      "    pushq %r12\n"
-      "    pushq %r13\n"
-      "    pushq %r14\n"
-      "    pushq %r15\n"
-      "    movq %rsp, %rdx\n" // rsp
-      "    jmp generator_switch_context\n");
-}
+extern void * _next(void *g, void *arg);
+extern void _restore_context(void *rsp);
+extern void _restore_context_with_return(void *rsp, void *arg);
+extern void * _yield(void *arg);
 
-void __attribute__((naked)) generator_restore_context(void *rsp) {
-  // @arch
-  asm("    movq %rdi, %rsp\n"
-      "    popq %r15\n"
-      "    popq %r14\n"
-      "    popq %r13\n"
-      "    popq %r12\n"
-      "    popq %rbx\n"
-      "    popq %rbp\n"
-      "    popq %rdi\n"
-      "    ret\n");
-}
-
-void __attribute__((naked)) generator_restore_context_with_return(void *rsp,
-                                                                  void *arg) {
-  // @arch
-  asm("    movq %rdi, %rsp\n"
-      "    movq %rsi, %rax\n"
-      "    popq %r15\n"
-      "    popq %r14\n"
-      "    popq %r13\n"
-      "    popq %r12\n"
-      "    popq %rbx\n"
-      "    popq %rbp\n"
-      "    popq %rdi\n"
-      "    ret\n");
-}
-
-void generator_switch_context(Generator *g, void *arg, void *rsp) {
+void _switch_context(Generator *g, void *arg, void *rsp) {
   da_last(&generator_stack)->rsp = rsp;
   da_append(&generator_stack, g);
   if (g->fresh) {
     g->fresh = false;
     void **rsp = (void **)((char *)g->stack_base + GENERATOR_STACK_CAPACITY);
     *(rsp - 3) = arg;
-    generator_restore_context(g->rsp);
+    _restore_context(g->rsp);
   } else {
-    generator_restore_context_with_return(g->rsp, arg);
+    _restore_context_with_return(g->rsp, arg);
   }
 }
 
-void *__attribute__((naked)) generator_yield(void *arg) {
-  // @arch
-  asm("    pushq %rdi\n"
-      "    pushq %rbp\n"
-      "    pushq %rbx\n"
-      "    pushq %r12\n"
-      "    pushq %r13\n"
-      "    pushq %r14\n"
-      "    pushq %r15\n"
-      "    movq %rsp, %rsi\n" // rsp
-      "    jmp generator_return\n");
-}
-
-void generator_return(void *arg, void *rsp) {
+void _return(void *arg, void *rsp) {
   da_last(&generator_stack)->rsp = rsp;
   generator_stack.count -= 1;
-  generator_restore_context_with_return(da_last(&generator_stack)->rsp, arg);
+  _restore_context_with_return(da_last(&generator_stack)->rsp, arg);
 }
 
 void generator__finish_current(void) {
   da_last(&generator_stack)->dead = true;
   generator_stack.count -= 1;
-  generator_restore_context_with_return(da_last(&generator_stack)->rsp, NULL);
+  _restore_context_with_return(da_last(&generator_stack)->rsp, NULL);
 }
 
 Generator *generator_create(void (*f)(void *)) {
@@ -194,7 +139,7 @@ void fib(void *arg) {
   long a = 0;
   long b = 1;
   while (a < max) {
-    generator_yield((void *)a);
+    _yield((void *)a);
     long c = a + b;
     a = b;
     b = c;
@@ -206,6 +151,5 @@ int main() {
   foreach (value, g, (void *)(1000 * 1000)) {
     printf("%ld\n", (long)value);
   }
-
   generator_destroy(g);
 }

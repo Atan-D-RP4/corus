@@ -1,3 +1,4 @@
+use std::alloc::{alloc,Layout};
 // NOTE:
 // The following commented out code only works on the nightly compiler
 // with naked functions feature enabled
@@ -91,7 +92,6 @@ unsafe extern "C" {
     pub unsafe fn _sleep_write(fd: i32);
     pub unsafe fn _restore_coroutine(rsp: *mut c_void);
 }
-
 
 static mut CURRENT: usize = 0;
 static mut ACTIVE: Vec<usize> = Vec::new();
@@ -269,7 +269,7 @@ unsafe fn _spawn(f: extern "C" fn(*mut c_void), arg: *mut c_void) {
         let id = coroutines.len() - 1;
 
         // Rust idiomatic stack allocation with alignment considered
-        let stack = std::alloc::alloc(std::alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap());
+        let stack = alloc(Layout::from_size_align(STACK_SIZE, 16).unwrap());
         coroutines[id].stack_base = stack as usize;
         id
     };
